@@ -168,14 +168,14 @@ def _parse_simple_yaml(path):
     return result
 
 
-def _normalize_git_url(url):
+def normalize_git_url(url):
     """Normalize a git URL for comparison (strip .git suffix and trailing slash)."""
     return url.rstrip("/").removesuffix(".git")
 
 
-def _repo_name_from_url(url):
+def repo_name_from_url(url):
     """Extract the repository name from a git URL."""
-    return _normalize_git_url(url).split("/")[-1]
+    return normalize_git_url(url).split("/")[-1]
 
 
 def _resolve_pr_info(pr_url):
@@ -301,7 +301,7 @@ def _scan_requirements_for_prs(base_path):
     return repos
 
 
-def _extract_repo_url(link_url):
+def extract_repo_url(link_url):
     """Extract a normalized repo URL from a GitHub/GitLab link.
 
     Handles PR URLs, commit URLs, file URLs, tree URLs, and plain repo URLs.
@@ -316,12 +316,12 @@ def _extract_repo_url(link_url):
     match = GITLAB_MR_RE.match(link_url)
     if match:
         base = link_url.split("/-/merge_requests/")[0]
-        return _normalize_git_url(base)
+        return normalize_git_url(base)
 
     # GitLab other paths (commits, tree, blob, etc.)
     match = GITLAB_REPO_RE.match(link_url)
     if match:
-        return _normalize_git_url(match.group(1))
+        return normalize_git_url(match.group(1))
 
     # GitHub other paths (commits, tree, blob, actions, etc.)
     match = GITHUB_REPO_RE.match(link_url)
@@ -390,10 +390,10 @@ def _discover_from_jira(ticket, base_path, plugin_root):
     # Group by normalized repo URL and count references
     repo_counts = {}  # normalized_url -> {"url": canonical_url, "count": N, "pr_urls": [...]}
     for url in all_urls:
-        repo_url = _extract_repo_url(url)
+        repo_url = extract_repo_url(url)
         if not repo_url:
             continue
-        normalized = _normalize_git_url(repo_url)
+        normalized = normalize_git_url(repo_url)
         if normalized not in repo_counts:
             repo_counts[normalized] = {"url": repo_url, "count": 0, "pr_urls": []}
         repo_counts[normalized]["count"] += 1
@@ -431,7 +431,7 @@ def _discover_from_jira(ticket, base_path, plugin_root):
 
     # Include all discovered repos in the result for logging
     if len(ranked) > 1 and result.get("status") == "resolved":
-        result["discovered_repos"] = {_normalize_git_url(r["url"]): r["count"] for r in ranked}
+        result["discovered_repos"] = {normalize_git_url(r["url"]): r["count"] for r in ranked}
 
     return result
 
@@ -490,7 +490,7 @@ def _verify_existing_clone(clone_dir, ref=None, expected_repo_url=None):
         )
         if origin.returncode != 0:
             return False
-        if _normalize_git_url(origin.stdout.strip()) != _normalize_git_url(expected_repo_url):
+        if normalize_git_url(origin.stdout.strip()) != normalize_git_url(expected_repo_url):
             return False
 
     if ref:
@@ -548,7 +548,7 @@ def _resolve_multiple_prs(pr_urls, base_path):
             repo_url, branch = _resolve_pr_info(url)
         except subprocess.CalledProcessError:
             continue
-        normalized = _normalize_git_url(repo_url)
+        normalized = normalize_git_url(repo_url)
         if normalized not in repo_groups:
             repo_groups[normalized] = {"repo_url": repo_url, "ref": branch, "urls": []}
         repo_groups[normalized]["urls"].append(url)
@@ -565,7 +565,7 @@ def _resolve_multiple_prs(pr_urls, base_path):
         repo_url = info["repo_url"]
         ref = info["ref"]
 
-        repo_name = _repo_name_from_url(repo_url)
+        repo_name = repo_name_from_url(repo_url)
         repo_clone_dir = base_path / "code-repo" / repo_name
 
         if repo_clone_dir.exists():
@@ -595,7 +595,7 @@ def _resolve_multiple_prs(pr_urls, base_path):
     _write_source_yaml(base_path, primary["repo_url"], primary["ref"])
 
     discovered = {
-        _normalize_git_url(info["repo_url"]): len(info["urls"]) for info in repo_groups.values()
+        normalize_git_url(info["repo_url"]): len(info["urls"]) for info in repo_groups.values()
     }
 
     result = _success(
@@ -639,7 +639,7 @@ def _resolve_explicit_repos(repo_values, pr_urls, base_path):
         ref = None
 
         if _is_remote_url(repo_value):
-            clone_dir = base_path / "code-repo" / _repo_name_from_url(repo_value)
+            clone_dir = base_path / "code-repo" / repo_name_from_url(repo_value)
 
             # First repo gets the PR branch (if any)
             if i == 0 and pr_urls:
@@ -733,7 +733,7 @@ def resolve(args):
                 pass
 
         if _is_remote_url(repo_value):
-            clone_dir = base_path / "code-repo" / _repo_name_from_url(repo_value)
+            clone_dir = base_path / "code-repo" / repo_name_from_url(repo_value)
             if clone_dir.exists():
                 if not _verify_existing_clone(clone_dir, ref, expected_repo_url=repo_value):
                     return {
