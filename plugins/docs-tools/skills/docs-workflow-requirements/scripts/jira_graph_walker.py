@@ -395,3 +395,139 @@ def extract_repos_from_tickets(tickets):
         "total_repos": len(repos),
         "total_prs": total_prs,
     }
+
+
+def run_graph_walk(reader, ticket_key, base_path, pr_urls=None):
+    """Run the full graph walk and return results.
+
+    Args:
+        reader: JiraReader instance
+        ticket_key: Central JIRA ticket key
+        base_path: Path to write output files
+        pr_urls: Optional list of PR URLs to include
+
+    Returns:
+        Tuple of (graph_raw, discovered_repos, errors)
+    """
+    all_errors = []
+    visited = {ticket_key}
+
+    print(f"Fetching central ticket: {ticket_key}", file=sys.stderr)
+    central_issue = reader.get_issue_data(ticket_key)
+    central_graph = reader.get_ticket_graph(ticket_key)
+
+    tickets = {}
+    tickets[ticket_key] = build_ticket_entry(
+        central_issue, central_graph, "central", 0, None
+    )
+
+    print("Walking up to find STRAT...", file=sys.stderr)
+    strat_info, ancestors, up_errors = walk_up_to_strat(
+        reader, central_issue, central_graph
+    )
+    tickets.update(ancestors)
+    all_errors.extend(up_errors)
+    visited.update(ancestors.keys())
+
+    if strat_info:
+        print(f"Found STRAT: {strat_info['key']} — {strat_info['summary']}", file=sys.stderr)
+    else:
+        print("No STRAT found in ancestor chain", file=sys.stderr)
+
+    walk_down_root = strat_info["key"] if strat_info else ticket_key
+    strat_distance = max((t["distance"] for t in ancestors.values()), default=0) + 1
+    print(f"Walking down from {walk_down_root}...", file=sys.stderr)
+    children, down_errors = walk_down_from(
+        reader, walk_down_root, visited, start_distance=strat_distance
+    )
+    tickets.update(children)
+    all_errors.extend(down_errors)
+
+    print(f"Walking sideways from {ticket_key}...", file=sys.stderr)
+    linked, side_errors = walk_sideways(reader, ticket_key, central_graph, visited)
+    tickets.update(linked)
+    all_errors.extend(side_errors)
+
+    if pr_urls:
+        existing = set(tickets[ticket_key].get("git_links", []))
+        for url in pr_urls:
+            if url not in existing:
+                tickets[ticket_key]["git_links"].append(url)
+                existing.add(url)
+
+    print("Extracting repos and PRs...", file=sys.stderr)
+    discovered_repos = extract_repos_from_tickets(tickets)
+
+    max_distance = max((t["distance"] for t in tickets.values()), default=0)
+    tree_stats = {
+        "total_tickets": len(tickets),
+        "depth": max_distance,
+        "strat_found": strat_info is not None,
+    }
+
+    graph_raw = {
+        "central_ticket": ticket_key,
+        "strat": strat_info,
+        "tickets": tickets,
+        "tree_stats": tree_stats,
+        "errors": all_errors,
+    }
+
+    return graph_raw, discovered_repos, all_errors
+
+
+def main():
+    parser = argparse.ArgumentParser(
+        description="Walk JIRA graph from a ticket to its STRAT and descendants"
+    )
+    parser.add_argument(
+        "--ticket", required=True, help="Central JIRA ticket key"
+    )
+    parser.add_argument(
+        "--base-path", required=True, help="Base output path (e.g., .claude/docs/proj-123)"
+    )
+    parser.add_argument(
+        "--pr", nargs="+", help="Additional PR/MR URLs to include"
+    )
+    args = parser.parse_args()
+
+    base_path = Path(args.base_path)
+    output_dir = base_path / "requirements"
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    jira_reader_dir = str(
+        Path(__file__).resolve().parents[2] / "jira-reader" / "scripts"
+    )
+    sys.path.insert(0, jira_reader_dir)
+    from jira_reader import JiraReader
+
+    reader = JiraReader()
+
+    graph_raw, discovered_repos, errors = run_graph_walk(
+        reader, args.ticket, base_path, pr_urls=args.pr
+    )
+
+    graph_file = output_dir / "graph-raw.json"
+    with open(graph_file, "w") as f:
+        json.dump(graph_raw, f, indent=2, default=str)
+    print(f"Wrote {graph_file}", file=sys.stderr)
+
+    repos_file = output_dir / "discovered_repos.json"
+    with open(repos_file, "w") as f:
+        json.dump(discovered_repos, f, indent=2)
+    print(f"Wrote {repos_file}", file=sys.stderr)
+
+    print(
+        f"\nGraph walk complete: {graph_raw['tree_stats']['total_tickets']} tickets, "
+        f"{discovered_repos['total_repos']} repos, "
+        f"{discovered_repos['total_prs']} PRs",
+        file=sys.stderr,
+    )
+    if errors:
+        print(f"Warnings: {len(errors)} errors during traversal", file=sys.stderr)
+
+    sys.exit(0)
+
+
+if __name__ == "__main__":
+    main()
