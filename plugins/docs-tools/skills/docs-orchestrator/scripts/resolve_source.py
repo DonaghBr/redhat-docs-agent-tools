@@ -301,6 +301,95 @@ def _scan_requirements_for_prs(base_path):
     return repos
 
 
+def _read_discovered_repos(base_path):
+    """Read discovered_repos.json if it exists.
+
+    Returns list of repo dicts [{"repo_url": ..., "pr_urls": [...]}] or empty list.
+    """
+    repos_file = Path(base_path) / "requirements" / "discovered_repos.json"
+    if not repos_file.exists():
+        return []
+    try:
+        with open(repos_file) as f:
+            data = json.load(f)
+        return data.get("repos", [])
+    except (json.JSONDecodeError, KeyError):
+        return []
+
+
+def _resolve_discovered_repos(discovered, base_path):
+    """Clone all repos from discovered_repos.json.
+
+    Clones each remote repo into code-repo/<repo_name>/. For repos with
+    PR URLs, resolves the first PR's branch and checks it out.
+
+    Returns a result dict (same contract as resolve()).
+    """
+    if not discovered:
+        return {"status": "no_source"}
+
+    resolved_repos = []
+    errors = []
+
+    for repo_entry in discovered:
+        repo_url = repo_entry.get("repo_url")
+        if not repo_url:
+            continue
+
+        pr_urls = repo_entry.get("pr_urls", [])
+        ref = None
+
+        if pr_urls:
+            try:
+                _, pr_branch = _resolve_pr_info(pr_urls[0])
+                ref = pr_branch
+            except (subprocess.CalledProcessError, Exception) as e:
+                print(
+                    f"WARNING: Could not resolve PR branch from {pr_urls[0]}: {e}",
+                    file=sys.stderr,
+                )
+
+        repo_name = repo_name_from_url(repo_url)
+        clone_dir = Path(base_path) / "code-repo" / repo_name
+
+        if clone_dir.exists():
+            if not _verify_existing_clone(clone_dir, ref, expected_repo_url=repo_url):
+                errors.append(f"Existing clone at {clone_dir} is invalid.")
+                continue
+        else:
+            if not _clone_repo(repo_url, clone_dir, ref):
+                errors.append(f"Could not clone {repo_url}.")
+                continue
+
+        resolved_repos.append(
+            {
+                "repo_path": str(clone_dir),
+                "repo_url": repo_url,
+                "ref": ref,
+            }
+        )
+
+    if not resolved_repos:
+        return {
+            "status": "error" if errors else "no_source",
+            "message": f"Could not clone any discovered repos. Errors: {'; '.join(errors)}" if errors else None,
+        }
+
+    primary = resolved_repos[0]
+    _write_source_yaml(base_path, primary["repo_url"], primary["ref"])
+
+    result = _success(
+        primary["repo_path"],
+        repo_url=primary["repo_url"],
+        ref=primary["ref"],
+    )
+    if len(resolved_repos) > 1:
+        result["additional_repos"] = resolved_repos[1:]
+    if errors:
+        result["warnings"] = errors
+    return result
+
+
 def extract_repo_url(link_url):
     """Extract a normalized repo URL from a GitHub/GitLab link.
 
@@ -768,6 +857,13 @@ def resolve(args):
     plugin_root = getattr(args, "plugin_root", None)
     if ticket and plugin_root:
         result = _discover_from_jira(ticket, base_path, plugin_root)
+        if result["status"] != "no_source":
+            return result
+
+    # --- Priority 4b: discovered_repos.json (from graph walk) ---
+    discovered = _read_discovered_repos(base_path)
+    if discovered:
+        result = _resolve_discovered_repos(discovered, base_path)
         if result["status"] != "no_source":
             return result
 
