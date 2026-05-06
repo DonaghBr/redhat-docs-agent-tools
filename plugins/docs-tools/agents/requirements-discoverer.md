@@ -1,6 +1,6 @@
 ---
 name: requirements-discoverer
-description: Lightweight discovery agent for requirements analysis pass 1. Performs JIRA traversal, PR listing, and spec identification to produce a structured JSON skeleton of requirements. Does NOT perform deep analysis, web search expansion, or acceptance criteria writing — those belong to the per-requirement deep analysis pass.
+description: "DEPRECATED — replaced by jira_graph_walker.py + Sonnet distillation agents in the requirements skill. Kept for reference. Original: Lightweight discovery agent for requirements analysis pass 1. Performs JIRA traversal, PR listing, and spec identification to produce a structured JSON skeleton of requirements."
 tools: Bash, WebFetch, Read, Write
 maxTurns: 20
 ---
