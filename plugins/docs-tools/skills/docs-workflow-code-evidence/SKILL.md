@@ -25,7 +25,7 @@ The writer typically works from the **documentation repository**, not the code r
 
 - `$1` — JIRA ticket ID (required)
 - `--base-path <path>` — Base output path (e.g., `.agent_workspace/proj-123`)
-- `--repo <path>` — Path to the source code repository (required — provided by the orchestrator after clone/verify, or by the user for standalone invocation)
+- `--repo <path> [<path>...]` — Path(s) to source code repositories (required — provided by the orchestrator after clone/verify). When multiple repos are provided, each is indexed and searched independently; results are merged per topic with `repo` attribution
 - `--scope-include <globs>` — Comma-separated glob patterns to include (e.g., `src/controllers/**,pkg/api/v1/**,README.md`). Scopes both source directory detection and search results. If omitted, the entire repo is in scope.
 - `--scope-exclude <globs>` — Comma-separated glob patterns to exclude (e.g., `**/vendor/**,**/*_test.go`). Applied as post-retrieval filters since code-finder does not support exclude globs natively.
 - `--reindex` — Force re-indexing even if a cached index exists
@@ -141,7 +141,7 @@ If **INSTALLED**, run directly (avoids re-downloading ~1GB of ML dependencies):
 
 ```bash
 python3 ${CLAUDE_PLUGIN_ROOT}/skills/code-evidence/scripts/find_evidence.py \
-  --repo "$REPO_PATH" \
+  --repo $REPO_PATH [$ADDITIONAL_REPO_PATHS...] \
   --queries-file "${OUTPUT_DIR}/queries.json" \
   --limit <LIMIT>
 ```
@@ -150,22 +150,25 @@ If **NOT_INSTALLED**, fall back to uv:
 
 ```bash
 uv run --with code-finder python3 ${CLAUDE_PLUGIN_ROOT}/skills/code-evidence/scripts/find_evidence.py \
-  --repo "$REPO_PATH" \
+  --repo $REPO_PATH [$ADDITIONAL_REPO_PATHS...] \
   --queries-file "${OUTPUT_DIR}/queries.json" \
   --limit <LIMIT>
 ```
 
 If `--reindex` is specified, add `--reindex` — it is applied to the first query only; subsequent queries reuse the freshly built index.
 
-The script outputs a JSON array of results, one per query entry:
+The script outputs a JSON array of results, one per query entry per repo:
 
 ```json
 [
-  {"query": "auth middleware implementation", "filter_paths": ["src/controllers"], "result": { ... }},
-  {"query": "auth middleware implementation", "filter_paths": null, "result": { ... }},
+  {"repo": "/path/to/repo1", "query": "auth middleware implementation", "filter_paths": ["src/controllers"], "result": { ... }},
+  {"repo": "/path/to/repo1", "query": "auth middleware implementation", "filter_paths": null, "result": { ... }},
+  {"repo": "/path/to/repo2", "query": "auth middleware implementation", "filter_paths": ["src/controllers"], "result": { ... }},
   ...
 ]
 ```
+
+When multiple repos are provided, each repo is indexed independently (cached at `{repo}/.vibe2doc/index.db`). The same query set runs against all repos. Results carry `repo` attribution so downstream steps know which repo each snippet came from.
 
 #### 5c. Post-retrieval processing
 

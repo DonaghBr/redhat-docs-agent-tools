@@ -45,7 +45,12 @@ def _run_single(retrieve_evidence, repo, query, limit, filter_paths, reindex):
 
 def main():
     parser = argparse.ArgumentParser(description="Retrieve code evidence from a repository")
-    parser.add_argument("--repo", required=True, help="Path to the repository")
+    parser.add_argument(
+        "--repo",
+        required=True,
+        nargs="+",
+        help="Path(s) to source code repository/repositories",
+    )
     parser.add_argument("--query", help="Natural language search query (single mode)")
     parser.add_argument(
         "--queries-file",
@@ -98,40 +103,47 @@ def main():
         )
         sys.exit(1)
 
+    reindex = args.reindex
+
     # Single query mode
     if args.query:
         filter_paths = _parse_filter_paths(args.filter_paths)
-        result = _run_single(
-            retrieve_evidence,
-            args.repo,
-            args.query,
-            args.limit,
-            filter_paths,
-            args.reindex,
-        )
-        json.dump(result, sys.stdout, indent=2, default=str)
+        all_results = []
+        for repo in args.repo:
+            result = _run_single(
+                retrieve_evidence,
+                repo,
+                args.query,
+                args.limit,
+                filter_paths,
+                reindex,
+            )
+            all_results.append({"repo": repo, "result": result})
+            reindex = False
+        json.dump(all_results, sys.stdout, indent=2, default=str)
         print()
         return
 
     # Batch mode
     results = []
-    for i, entry in enumerate(queries):
-        query = entry["query"]
-        limit = entry.get("limit", args.limit)
-        filter_paths = entry.get("filter_paths")
+    for repo in args.repo:
+        for i, entry in enumerate(queries):
+            query = entry["query"]
+            limit = entry.get("limit", args.limit)
+            filter_paths = entry.get("filter_paths")
 
-        # Only reindex on the first query — subsequent queries reuse the cache
-        reindex = args.reindex and i == 0
-
-        result = _run_single(
-            retrieve_evidence,
-            args.repo,
-            query,
-            limit,
-            filter_paths,
-            reindex,
-        )
-        results.append({"query": query, "filter_paths": filter_paths, "result": result})
+            result = _run_single(
+                retrieve_evidence,
+                repo,
+                query,
+                limit,
+                filter_paths,
+                reindex and i == 0,
+            )
+            results.append(
+                {"repo": repo, "query": query, "filter_paths": filter_paths, "result": result}
+            )
+        reindex = False
 
     json.dump(results, sys.stdout, indent=2, default=str)
     print()
