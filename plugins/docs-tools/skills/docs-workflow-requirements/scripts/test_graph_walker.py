@@ -177,3 +177,81 @@ def test_walk_up_no_strat_found():
 
     assert strat is None
     assert "PROJ-1" in ancestors
+
+
+def test_extract_repos_from_tickets_groups_by_repo():
+    from jira_graph_walker import extract_repos_from_tickets
+
+    tickets = {
+        "INFERENG-6188": {
+            "key": "INFERENG-6188",
+            "git_links": [
+                "https://github.com/org/operator/pull/42",
+                "https://github.com/org/operator/pull/87",
+            ],
+            "web_links": {"total": 0, "links": []},
+            "auto_discovered_urls": {"pull_requests": [], "google_docs": []},
+        },
+        "INFERENG-6201": {
+            "key": "INFERENG-6201",
+            "git_links": ["https://github.com/org/vllm/pull/10"],
+            "web_links": {"total": 0, "links": []},
+            "auto_discovered_urls": {
+                "pull_requests": ["https://github.com/org/operator/pull/99"],
+                "google_docs": [],
+            },
+        },
+    }
+
+    result = extract_repos_from_tickets(tickets)
+
+    assert result["total_repos"] == 2
+    operator = next(r for r in result["repos"] if "operator" in r["repo_url"])
+    assert operator["reference_count"] == 2
+    assert len(operator["pr_urls"]) == 3
+    assert "INFERENG-6188" in operator["source_tickets"]
+    assert "INFERENG-6201" in operator["source_tickets"]
+
+    vllm = next(r for r in result["repos"] if "vllm" in r["repo_url"])
+    assert vllm["reference_count"] == 1
+
+
+def test_extract_repos_from_tickets_empty():
+    from jira_graph_walker import extract_repos_from_tickets
+
+    tickets = {
+        "PROJ-1": {
+            "key": "PROJ-1",
+            "git_links": [],
+            "web_links": {"total": 0, "links": []},
+            "auto_discovered_urls": {"pull_requests": [], "google_docs": []},
+        },
+    }
+
+    result = extract_repos_from_tickets(tickets)
+
+    assert result["total_repos"] == 0
+    assert result["total_prs"] == 0
+    assert result["repos"] == []
+
+
+def test_extract_repos_deduplicates_pr_urls():
+    from jira_graph_walker import extract_repos_from_tickets
+
+    tickets = {
+        "PROJ-1": {
+            "key": "PROJ-1",
+            "git_links": ["https://github.com/org/repo/pull/42"],
+            "web_links": {"total": 0, "links": []},
+            "auto_discovered_urls": {
+                "pull_requests": ["https://github.com/org/repo/pull/42"],
+                "google_docs": [],
+            },
+        },
+    }
+
+    result = extract_repos_from_tickets(tickets)
+
+    repo = result["repos"][0]
+    assert len(repo["pr_urls"]) == 1
+    assert repo["reference_count"] == 1

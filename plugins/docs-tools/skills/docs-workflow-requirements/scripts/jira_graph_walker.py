@@ -15,9 +15,23 @@ Usage:
 
 import argparse
 import json
+import re
 import sys
 from collections import deque
 from pathlib import Path
+
+sys.path.insert(
+    0,
+    str(
+        Path(__file__).resolve().parents[2]
+        / "docs-orchestrator"
+        / "scripts"
+    ),
+)
+from resolve_source import extract_repo_url, normalize_git_url
+
+GITHUB_PR_RE = re.compile(r"https?://github\.com/[^/]+/[^/]+/pull/\d+")
+GITLAB_MR_RE = re.compile(r"https?://gitlab\.[^/]+/.+?/-/merge_requests/\d+")
 
 # STRAT project prefixes — tickets in these projects are strategy-level
 STRAT_PREFIXES = ("RHAISTRAT-", "RHALISTRAT-", "RHELSTRAT-", "AASSTRAT-")
@@ -308,3 +322,76 @@ def walk_sideways(reader, central_key, central_graph_data, visited):
         linked[sib_key] = build_ticket_entry(issue, sib_graph, "sibling", 1, None)
 
     return linked, errors
+
+
+def extract_repos_from_tickets(tickets):
+    """Extract and group all repo/PR URLs from visited tickets.
+
+    Scans git_links, web_links, and auto_discovered_urls from every ticket.
+    Groups by normalized repo URL, counts references, and attributes to
+    source tickets. Deduplicates PR URLs.
+
+    Args:
+        tickets: Dict of {key: ticket_entry} from the graph walk
+
+    Returns:
+        Dict matching discovered_repos.json schema
+    """
+    repo_groups = {}
+
+    for ticket_key, ticket in tickets.items():
+        all_urls = list(ticket.get("git_links", []))
+
+        auto = ticket.get("auto_discovered_urls", {})
+        for pr_url in auto.get("pull_requests", []):
+            if pr_url not in all_urls:
+                all_urls.append(pr_url)
+
+        seen_urls = set()
+        unique_urls = []
+        for url in all_urls:
+            if url not in seen_urls:
+                seen_urls.add(url)
+                unique_urls.append(url)
+
+        for url in unique_urls:
+            repo_url = extract_repo_url(url)
+            if not repo_url:
+                continue
+
+            normalized = normalize_git_url(repo_url)
+
+            if normalized not in repo_groups:
+                repo_groups[normalized] = {
+                    "repo_url": repo_url,
+                    "pr_urls": set(),
+                    "source_tickets": set(),
+                }
+
+            repo_groups[normalized]["source_tickets"].add(ticket_key)
+
+            if GITHUB_PR_RE.match(url) or GITLAB_MR_RE.match(url):
+                repo_groups[normalized]["pr_urls"].add(url)
+
+    repos = []
+    total_prs = 0
+    for normalized, group in sorted(
+        repo_groups.items(), key=lambda x: len(x[1]["source_tickets"]), reverse=True
+    ):
+        pr_list = sorted(group["pr_urls"])
+        repos.append(
+            {
+                "repo_url": group["repo_url"],
+                "normalized": normalized,
+                "reference_count": len(group["source_tickets"]),
+                "pr_urls": pr_list,
+                "source_tickets": sorted(group["source_tickets"]),
+            }
+        )
+        total_prs += len(pr_list)
+
+    return {
+        "repos": repos,
+        "total_repos": len(repos),
+        "total_prs": total_prs,
+    }
