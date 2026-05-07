@@ -538,7 +538,7 @@ def _clone_repo(repo_url, clone_dir, ref=None):
         if result.returncode == 0:
             return True
 
-        # Fallback: clone default branch, then fetch and checkout the ref
+        # Fallback: clone default branch, then try to checkout the ref
         result = _run_git(
             ["clone", "--depth", "1", repo_url, clone_dir],
             check=False,
@@ -548,7 +548,12 @@ def _clone_repo(repo_url, clone_dir, ref=None):
 
         fetch = _run_git(["fetch", "origin", ref], cwd=clone_dir, check=False)
         if fetch.returncode != 0:
-            return False
+            print(
+                f"WARNING: Cloned {repo_url} but ref '{ref}' not found "
+                f"(branch may have been deleted after merge). Using default branch.",
+                file=sys.stderr,
+            )
+            return True
 
         checkout = _run_git(["checkout", "FETCH_HEAD"], cwd=clone_dir, check=False)
         return checkout.returncode == 0
@@ -596,20 +601,30 @@ def _verify_existing_clone(clone_dir, ref=None, expected_repo_url=None):
                 check=False,
             )
             if fetch.returncode != 0:
-                return False
-            checkout = _run_git(
-                ["checkout", ref],
-                cwd=str(clone_dir),
-                check=False,
-            )
-            if checkout.returncode != 0:
-                fallback = _run_git(
-                    ["checkout", "FETCH_HEAD"],
+                print(
+                    f"WARNING: Could not fetch ref '{ref}' in {clone_dir} "
+                    f"(branch may have been deleted after merge). "
+                    f"Using clone at HEAD.",
+                    file=sys.stderr,
+                )
+            else:
+                checkout = _run_git(
+                    ["checkout", ref],
                     cwd=str(clone_dir),
                     check=False,
                 )
-                if fallback.returncode != 0:
-                    return False
+                if checkout.returncode != 0:
+                    fallback = _run_git(
+                        ["checkout", "FETCH_HEAD"],
+                        cwd=str(clone_dir),
+                        check=False,
+                    )
+                    if fallback.returncode != 0:
+                        print(
+                            f"WARNING: Fetched ref '{ref}' but checkout failed "
+                            f"in {clone_dir}. Using clone at HEAD.",
+                            file=sys.stderr,
+                        )
     return True
 
 
